@@ -1,0 +1,494 @@
+// Copyright 2026 Dwi Siswanto ("dwisiswant0"). All rights reserved.
+// Use of this source code is governed by the Apache License, Version 2.0,
+// that can be found in the LICENSE file.
+
+package p308
+
+import "math/bits"
+
+// byteBits is the size of a byte in bits.
+const byteBits = 8
+
+// curve is the Montgomery curve y² = x³ + A·x² + x over GF(p²).
+//
+// The x-only formulas (xdbl, xdblAdd, xmul) compute the same projective
+// representatives as the reference implementation. The torsion basis takes
+// a square root whose sign depends on those representatives, so a
+// mathematically equivalent formula could select a different basis and
+// change intermediate values.
+type curve struct {
+	a   fp2 // A
+	a24 fp2 // (A + 2)/4
+}
+
+// newCurve returns the curve with coefficient a, which must not be ±2.
+func newCurve(a *fp2) curve {
+	var c curve
+
+	c.a = *a
+	c.a24.one().double(&c.a24).add(&c.a24, a).half(&c.a24).half(&c.a24)
+
+	return c
+}
+
+// scalarBit returns bit i of the little-endian scalar n.
+func scalarBit(n []byte, i int) uint64 {
+	return uint64(n[i/byteBits]>>(i%byteBits)) & 1
+}
+
+// pointX is the image x(P) = (X : Z) of a point P on the Kummer line, where
+// P and −P are identified. The point at infinity is (1 : 0).
+type pointX struct{ x, z fp2 }
+
+func (p *pointX) setInfinity() {
+	p.x.one()
+	p.z.zero()
+}
+
+// affineX returns X/Z.
+func (p *pointX) affineX() fp2 {
+	var inv fp2
+
+	inv.invert(&p.z)
+
+	return *inv.mul(&p.x, &inv)
+}
+
+func (p *pointX) swap(q *pointX, cond uint64) {
+	p.x.swap(&q.x, cond)
+	p.z.swap(&q.z, cond)
+}
+
+// basisX holds x(P), x(Q), and x(P − Q) for a basis (P, Q) of a torsion
+// subgroup.
+type basisX struct{ p, q, pq pointX }
+
+// xdbl sets dst = [2]dst.
+func (c *curve) xdbl(dst *pointX) {
+	var sum, diff fp2
+
+	sum.add(&dst.x, &dst.z).square(&sum)
+	diff.sub(&dst.x, &dst.z).square(&diff)
+	dst.x.mul(&sum, &diff)
+	sum.sub(&sum, &diff)
+	dst.z.mul(&sum, &c.a24).add(&dst.z, &diff).mul(&dst.z, &sum)
+}
+
+// xdblN sets pt = [2^n]pt.
+func (c *curve) xdblN(pt *pointX, n int) {
+	for range n {
+		c.xdbl(pt)
+	}
+}
+
+// xdblProj sets dst = [2]dst on the curve with (A + 2)/4 = (a24 : c24).
+func xdblProj(dst *pointX, a24, c24 *fp2) {
+	var tmp0, tmp1, tmp2 fp2
+
+	tmp0.add(&dst.x, &dst.z).square(&tmp0)
+	tmp1.sub(&dst.x, &dst.z).square(&tmp1)
+	tmp2.sub(&tmp0, &tmp1)
+	tmp1.mul(&tmp1, c24)
+	dst.x.mul(&tmp0, &tmp1)
+	tmp0.mul(&tmp2, a24).add(&tmp0, &tmp1)
+	dst.z.mul(&tmp0, &tmp2)
+}
+
+// xdblAdd sets dbl = [2]dbl and sum = x(dbl + sum), given diff = x(dbl − sum).
+// The point diff must not alias dbl or sum.
+func (c *curve) xdblAdd(dbl, sum, diff *pointX) {
+	var tmp0, tmp1, xSq, zSq, tmp2, tmp3 fp2
+
+	tmp0.add(&dbl.x, &dbl.z)
+	tmp1.sub(&dbl.x, &dbl.z)
+	xSq.square(&tmp0)
+	zSq.square(&tmp1)
+	tmp2.sub(&xSq, &zSq)
+	dbl.x.mul(&xSq, &zSq)
+	dbl.z.mul(&c.a24, &tmp2).add(&dbl.z, &zSq).mul(&dbl.z, &tmp2)
+
+	tmp0.mul(&tmp0, tmp3.sub(&sum.x, &sum.z))
+	tmp1.mul(&tmp1, tmp3.add(&sum.x, &sum.z))
+	sum.x.add(&tmp0, &tmp1).square(&sum.x).mul(&sum.x, &diff.z)
+	sum.z.sub(&tmp0, &tmp1).square(&sum.z).mul(&sum.z, &diff.x)
+}
+
+// xmul returns x([scalar]base), using the Montgomery ladder. It is used only
+// to clear the public cofactor c, from points of large order, so it omits
+// the special handling of base = (0 : 1).
+func (c *curve) xmul(base *pointX, scalar uint64) pointX {
+	var low, high pointX
+
+	low.setInfinity()
+
+	high = *base
+
+	var prevBit uint64
+
+	for i := bits.Len64(scalar) - 1; i >= 0; i-- {
+		bit := (scalar >> i) & 1
+		low.swap(&high, bit^prevBit)
+		c.xdblAdd(&low, &high, base)
+
+		prevBit = bit
+	}
+
+	low.swap(&high, prevBit)
+
+	return low
+}
+
+// threePointLadder returns x(P + [scalar]Q) for the basis (x(P), x(Q),
+// x(P − Q)) and the little-endian scalar of nbits bits.
+func (c *curve) threePointLadder(basis *basisX, scalar []byte, nbits int) pointX {
+	ladderQ, ladderP, ladderPQ := basis.q, basis.p, basis.pq
+
+	var prevBit uint64
+
+	for i := range nbits {
+		bit := scalarBit(scalar, i)
+		ladderP.swap(&ladderPQ, bit^prevBit)
+		c.xdblAdd(&ladderQ, &ladderPQ, &ladderP)
+
+		prevBit = bit
+	}
+
+	ladderP.swap(&ladderPQ, prevBit)
+
+	return ladderP
+}
+
+// point is a point (X : Y : Z) in Jacobian coordinates, representing the
+// affine point (X/Z², Y/Z³). The point at infinity has Z = 0.
+type point struct{ x, y, z fp2 }
+
+func (p *point) setInfinity() {
+	p.x.zero()
+	p.y.one()
+	p.z.zero()
+}
+
+// toX returns x(P) = (X : Z²).
+func (p *point) toX() pointX {
+	var res pointX
+
+	res.x = p.x
+	res.z.square(&p.z)
+
+	return res
+}
+
+func (p *point) isInfinity() uint64 { return p.z.isZero() }
+
+// neg returns −P.
+func (p *point) neg() point {
+	res := *p
+	res.y.neg(&res.y)
+
+	return res
+}
+
+// selectFrom sets p = q if cond = 1.
+func (p *point) selectFrom(q *point, cond uint64) {
+	p.x.selectFrom(&q.x, &p.x, cond)
+	p.y.selectFrom(&q.y, &p.y, cond)
+	p.z.selectFrom(&q.z, &p.z, cond)
+}
+
+// double returns [2]src.
+func (c *curve) double(src *point) point {
+	var (
+		dbl                    point
+		tmp0, tmp1, tmp2, tmp3 fp2
+	)
+
+	tmp0.square(&src.x)
+	tmp0.add(&tmp0, tmp1.double(&tmp0))
+	tmp1.square(&src.z)
+	tmp2.mul(&src.x, &c.a).double(&tmp2)
+	tmp2.add(&tmp2, &tmp1).mul(&tmp2, &tmp1).add(&tmp2, &tmp0)
+
+	dbl.z.mul(&src.y, &src.z).double(&dbl.z)
+
+	dbl.x.square(&tmp2)
+	tmp0.square(&dbl.z).mul(&tmp0, &c.a)
+	tmp1.square(&src.y).double(&tmp1)
+	tmp3.double(&src.x).mul(&tmp3, &tmp1)
+	dbl.x.sub(&dbl.x, &tmp0)
+	dbl.x.sub(&dbl.x, tmp0.double(&tmp3))
+
+	dbl.y.sub(&tmp3, &dbl.x).mul(&dbl.y, &tmp2)
+	tmp1.square(&tmp1).double(&tmp1)
+	dbl.y.sub(&dbl.y, &tmp1)
+
+	return dbl
+}
+
+// doubleN returns [2^n]pt.
+func (c *curve) doubleN(pt *point, n int) point {
+	acc := *pt
+	for range n {
+		acc = c.double(&acc)
+	}
+
+	return acc
+}
+
+// modJacobian is a point (X : Y : Z : T) in modified Jacobian coordinates on
+// a short Weierstrass curve y² = x³ + a·x + b, where T = a·Z⁴.
+type modJacobian struct{ x, y, z, t fp2 }
+
+// double sets p = [2]p.
+func (p *modJacobian) double() {
+	var xSquared, cTerm, cSquared, rTerm, sTerm, mTerm, tmp fp2
+
+	xSquared.square(&p.x)
+	cTerm.square(&p.y).double(&cTerm) // c = 2Y²
+	sTerm.add(&p.x, &cTerm).square(&sTerm)
+	cSquared.square(&cTerm)
+	rTerm.double(&cSquared)
+	sTerm.sub(&sTerm, &xSquared).sub(&sTerm, &cSquared)
+	mTerm.double(&xSquared).add(&mTerm, &xSquared).add(&mTerm, &p.t)
+	p.x.square(&mTerm).sub(&p.x, tmp.double(&sTerm))
+	p.z.mul(&p.y, &p.z).double(&p.z)
+	p.y.sub(&sTerm, &p.x).mul(&p.y, &mTerm).sub(&p.y, &rTerm)
+	p.t.mul(&rTerm, &p.t).double(&p.t)
+}
+
+// doubleNFast returns [2^count]base. It converts base to modified Jacobian
+// coordinates on the short Weierstrass model, where doubling is cheaper, and
+// back. The argument aDiv3 must be A/3.
+func (c *curve) doubleNFast(base *point, aDiv3 *fp2, count int) point {
+	// The map (x, y) → (x + A/3, y) sends the curve to y² = x³ + a·x + b
+	// with a = 1 − A²/3.
+	var weierA, zSquared, one fp2
+
+	weierA.mul(&c.a, aDiv3)
+	weierA.sub(one.one(), &weierA)
+	zSquared.square(&base.z)
+
+	var acc modJacobian
+
+	acc.t.square(&zSquared).mul(&acc.t, &weierA)
+	acc.x, acc.y, acc.z = base.x, base.y, base.z
+	acc.x.add(&acc.x, zSquared.mul(&zSquared, aDiv3))
+
+	for range count {
+		acc.double()
+	}
+
+	var res point
+
+	res.y, res.z = acc.y, acc.z
+	zSquared.square(&acc.z).mul(&zSquared, aDiv3)
+	res.x.sub(&acc.x, &zSquared)
+
+	return res
+}
+
+// add returns lhs + rhs. It handles lhs = rhs and the point at infinity, and
+// runs in constant time.
+func (c *curve) add(lhs, rhs *point) point {
+	lhsInf := lhs.z.isZero()
+	rhsInf := rhs.z.isZero()
+
+	// The slope num/den for lhs ≠ rhs, from the coordinates scaled to a
+	// common denominator.
+	var lhsZ2, rhsZ2, lhsY, rhsY, num, lhsX, rhsX, den fp2
+
+	lhsZ2.square(&lhs.z)
+	rhsZ2.square(&rhs.z)
+	lhsY.mul(&rhsZ2, &rhs.z).mul(&lhsY, &lhs.y)
+	rhsY.mul(&lhsZ2, &lhs.z).mul(&rhsY, &rhs.y)
+	num.sub(&rhsY, &lhsY)
+	rhsX.mul(&lhsZ2, &rhs.x)
+	lhsX.mul(&rhsZ2, &lhs.x)
+	den.sub(&rhsX, &lhsX)
+
+	// The tangent slope for lhs = rhs, scaled to the same denominator.
+	var tanDen, tanNum, xSquared fp2
+
+	tanDen.double(&lhs.y)
+	tanNum.mul(&c.a, &lhs.x).double(&tanNum)
+	tanNum.add(&tanNum, &lhsZ2).mul(&tanNum, &lhsZ2)
+	xSquared.square(&lhs.x)
+	tanNum.add(&tanNum, &xSquared).add(&tanNum, &xSquared).add(&tanNum, &xSquared)
+	tanNum.mul(&tanNum, &rhs.z)
+
+	same := den.isZero() & num.isZero()
+	den.selectFrom(&tanDen, &den, same)
+	num.selectFrom(&tanNum, &num, same)
+
+	var (
+		sum                            point
+		zProd, zProd2, den2, num2, tmp fp2
+	)
+
+	zProd.mul(&lhs.z, &rhs.z)
+	zProd2.square(&zProd)
+	den2.square(&den)
+	num2.square(&num)
+
+	sum.x.mul(&c.a, &zProd2).add(&sum.x, &lhsX).add(&sum.x, &rhsX).mul(&sum.x, &den2)
+	sum.x.sub(&num2, &sum.x)
+
+	sum.y.mul(&lhsX, &den2).sub(&sum.y, &sum.x).mul(&sum.y, &num)
+	tmp.mul(&den, &den2).mul(&tmp, &lhsY)
+	sum.y.sub(&sum.y, &tmp)
+
+	sum.z.mul(&den, &zProd)
+
+	sum.selectFrom(rhs, lhsInf)
+	sum.selectFrom(lhs, rhsInf)
+
+	return sum
+}
+
+// sub returns lhs − rhs.
+func (c *curve) sub(lhs, rhs *point) point {
+	negated := rhs.neg()
+
+	return c.add(lhs, &negated)
+}
+
+// addComponents returns (u, v, w) such that x(P + Q) = (u − v)/w and
+// x(P − Q) = (u + v)/w, for distinct points P and Q.
+func (c *curve) addComponents(ptP, ptQ *point) (fp2, fp2, fp2) {
+	var compU, compV, compW, tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6 fp2
+
+	tmp0.square(&ptP.z)
+	tmp1.square(&ptQ.z)
+	tmp2.mul(&tmp1, &ptP.x)
+	tmp3.mul(&tmp0, &ptQ.x)
+	tmp4.mul(&ptP.y, &ptQ.z).mul(&tmp4, &tmp1)
+	tmp5.mul(&ptP.z, &ptQ.y).mul(&tmp5, &tmp0)
+	tmp0.mul(&tmp0, &tmp1)
+	tmp6.mul(&tmp4, &tmp5)
+	compV.double(&tmp6)
+	tmp4.square(&tmp4)
+	tmp5.square(&tmp5)
+	tmp4.add(&tmp4, &tmp5)
+	tmp5.add(&tmp2, &tmp3)
+	tmp6.double(&tmp3)
+	tmp6.sub(&tmp5, &tmp6).square(&tmp6)
+	tmp1.mul(&c.a, &tmp0).add(&tmp1, &tmp5).mul(&tmp1, &tmp6)
+	compU.sub(&tmp4, &tmp1)
+	compW.mul(&tmp6, &tmp0)
+
+	return compU, compV, compW
+}
+
+// mul returns [scalar >> start]base, where scalar is little-endian and only
+// bits start through nbits−1 are used. It runs in constant time for fixed
+// start and nbits.
+//
+// MIKE uses start = 1 to multiply by (s − 1)/2 for an odd scalar s.
+func (c *curve) mul(base *point, scalar []byte, start, nbits int) point {
+	// A Montgomery ladder on x(P), followed by y-coordinate recovery using
+	// the formulas of Okeya and Sakurai.
+	ptX := base.toX()
+
+	var mult, next pointX // x([n]P) and x([n+1]P)
+
+	mult.setInfinity()
+
+	next = ptX
+
+	var prevBit uint64
+
+	for i := nbits - 1; i >= start; i-- {
+		bit := scalarBit(scalar, i)
+		mult.swap(&next, bit^prevBit)
+		c.xdblAdd(&mult, &next, &ptX)
+
+		prevBit = bit
+	}
+
+	mult.swap(&next, prevBit)
+
+	res := c.recoverY(base, &mult, &next)
+	c.fixSpecialCases(&res, base, &mult, &next, uint64(scalar[0]&1))
+
+	return res
+}
+
+// scaledBase returns the coordinates of pt rescaled for the ladder, which
+// works with (X : Z) for x = X/Z, while pt has x = X/Z².
+func scaledBase(pt *point) (fp2, fp2) {
+	var scaledX, scaledZ, zSquared fp2
+
+	scaledX.mul(&pt.x, &pt.z)
+	zSquared.square(&pt.z)
+	scaledZ.mul(&pt.z, &zSquared)
+
+	return scaledX, scaledZ
+}
+
+// recoverY returns [n]base in Jacobian coordinates, given mult = x([n]base)
+// and next = x([n+1]base).
+func (c *curve) recoverY(base *point, mult, next *pointX) point {
+	baseX, baseZ := scaledBase(base)
+
+	var xxzz, xpz0, x0zp, zProd, zzdA, compU, compV, tmp fp2
+
+	xxzz.mul(&baseX, &mult.x).add(&xxzz, tmp.mul(&baseZ, &mult.z))
+	xpz0.mul(&baseX, &mult.z)
+	x0zp.mul(&mult.x, &baseZ)
+	zProd.mul(&baseZ, &mult.z)
+	zzdA.double(&c.a).mul(&zzdA, &zProd)
+	compU.add(&xpz0, &x0zp).add(&compU, &zzdA).mul(&compU, &xxzz)
+	compU.sub(&compU, tmp.mul(&zzdA, &zProd))
+	compV.double(&base.y).mul(&compV, &zProd).mul(&compV, &next.z)
+
+	var res point
+
+	res.x.mul(&mult.x, &compV)
+	res.y.mul(&compU, &next.z)
+	tmp.sub(&xpz0, &x0zp).square(&tmp).mul(&tmp, &next.x)
+	res.y.sub(&res.y, &tmp)
+	res.z.mul(&mult.z, &compV)
+
+	// Convert from projective weights (λX : λY : λZ) to Jacobian weights
+	// (λ²X : λ³Y : λZ).
+	res.x.mul(&res.x, &res.z)
+	res.y.mul(&res.y, tmp.square(&res.z))
+
+	return res
+}
+
+// fixSpecialCases corrects res = [n]base in the cases where recoverY fails,
+// given mult = x([n]base), next = x([n+1]base), and the parity odd of n:
+//
+//	base = ∞                                    → ∞
+//	base ≠ ∞, [2]base = ∞                       → ∞ or base, depending on the parity
+//	[2]base ≠ ∞, [n]base = ∞                    → ∞
+//	[2]base ≠ ∞, [n]base ≠ ∞, [n+1]base = ∞    → −base
+//	[2]base ≠ ∞, [n]base ≠ ∞, [n+1]base = base → −[2]base
+func (c *curve) fixSpecialCases(res, base *point, mult, next *pointX, odd uint64) {
+	baseX, baseZ := scaledBase(base)
+
+	order1 := baseZ.isZero()
+	order2 := (1 ^ order1) & base.y.isZero()
+	generic := (1 ^ order1) & (1 ^ order2)
+	multInf := mult.z.isZero()
+	nextInf := next.z.isZero()
+
+	var lhs, rhs fp2
+
+	nextIsPt := lhs.mul(&next.x, &baseZ).equal(rhs.mul(&baseX, &next.z))
+
+	// The generic cases where [n]base = ∞, [n+1]base = ∞, and
+	// [n+1]base = base.
+	isInf := generic & multInf
+	isNegPt := generic & (1 ^ multInf) & nextInf
+	isNegDbl := generic & (1 ^ multInf) & (1 ^ nextInf) & nextIsPt
+
+	var zero fp2
+
+	dbl := c.double(base)
+
+	res.z.selectFrom(&zero, &res.z, order1|(order2&(1^odd))|isInf)
+	res.selectFrom(base, isNegPt|(order2&odd))
+	res.selectFrom(&dbl, isNegDbl)
+	res.y.condNeg(isNegPt | isNegDbl)
+}

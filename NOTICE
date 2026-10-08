@@ -1,0 +1,17 @@
+mike
+Copyright 2026 Dwi Siswanto ("dwisiswant0")
+
+This product is a Go port of the Rust reference implementation of MIKE,
+https://github.com/tensor-mike/mike_rs, which is licensed under the Apache
+License, Version 2.0. The MIKE reference implementations carry the following
+notice:
+
+  Copyright 2026 the MIKE team. All rights reserved.
+
+  The MIKE team: Andrea Basso, Pierrick Dartois, Max Duparc, Jonathan Komada
+  Eriksen, Sabrina Kunzweiler, Michael Meyer, Giacomo Pope, Krijn Reijnders,
+  Damien Robert, Ryan Rueger, and Sina Schaeffler.
+
+The test vectors in testdata/vectors.txt, which include the known-answer
+tests, and the public parameters in internal/gen/params.txt come from the
+Rust reference implementation.
