@@ -99,21 +99,6 @@ func (z *fp) half(elem *fp) *fp {
 // invert sets z = 1/x, or z = 0 if x = 0.
 func (z *fp) invert(x *fp) *fp { return z.pow(x, &fpExpInv) }
 
-// sqrt sets z to a square root of elem and returns 1. The root is the one
-// whose canonical encoding is an even integer. If elem is not a square, it
-// sets z = 0 and returns 0.
-func (z *fp) sqrt(elem *fp) uint64 {
-	// p ≡ 3 mod 4, so elem^((p+1)/4) is a square root when one exists.
-	var root, check, zero fp
-
-	root.pow(elem, &fpExpSqrt)
-	ok := check.square(&root).equal(elem)
-	root.selectFrom(&root, &zero, ok)
-	z.selectFrom(check.neg(&root), &root, root.isOdd())
-
-	return ok
-}
-
 // isSquare returns 1 if z is a square in GF(p), including zero.
 func (z *fp) isSquare() uint64 {
 	// By Euler's criterion, z^((p−1)/2) = 1 for nonzero squares.

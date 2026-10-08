@@ -170,16 +170,19 @@ func twoIsogeny2(gen1, gen2 *theta2, images []theta2, dualIn, dualOut bool) thet
 type theta4 [16]fp
 
 // hadamard applies the Hadamard transform in place: four layers of
-// butterflies (a, b) → (a + b, a − b).
-func (p *theta4) hadamard() {
+// butterflies (a, b) → (a + b, a − b). On amd64, it runs assembly.
+func (p *theta4) hadamard() { theta4Hadamard(p) }
+
+// theta4HadamardGeneric is the Go code of the hadamard method.
+func theta4HadamardGeneric(point *theta4) {
 	var tmp fp
 
-	for stride := 1; stride < len(p); stride <<= 1 {
-		for block := 0; block < len(p); block += stride << 1 {
+	for stride := 1; stride < len(point); stride <<= 1 {
+		for block := 0; block < len(point); block += stride << 1 {
 			for idx := block; idx < block+stride; idx++ {
-				tmp = p[idx]
-				p[idx].add(&tmp, &p[idx+stride])
-				p[idx+stride].sub(&tmp, &p[idx+stride])
+				tmp = point[idx]
+				point[idx].add(&tmp, &point[idx+stride])
+				point[idx+stride].sub(&tmp, &point[idx+stride])
 			}
 		}
 	}
@@ -403,8 +406,9 @@ func (s *theta4Structure) doubleN(dst *theta4, n int) {
 // twoIsogeny4 computes the (2,2,2,2)-isogeny whose kernel is determined by
 // the points gen1 and gen2 lying above it with order 8, using the symmetries
 // of the MIKE theta structures. It maps each of images in place and returns
-// the codomain.
-func twoIsogeny4(gen1, gen2 *theta4, images []theta4) theta4Structure {
+// the codomain as the coordinate-wise inverse of its dual null point, from
+// which newTheta4StructureFromInvDual computes the structure.
+func twoIsogeny4(gen1, gen2 *theta4, images []theta4) theta4 {
 	kerP, kerQ := *gen1, *gen2
 	kerP.square()
 	kerP.hadamard()
@@ -420,7 +424,7 @@ func twoIsogeny4(gen1, gen2 *theta4, images []theta4) theta4Structure {
 		img.hadamard()
 	}
 
-	return newTheta4StructureFromInvDual(&invDual)
+	return invDual
 }
 
 // invDualCodomain returns the coordinate-wise inverse of the codomain's dual

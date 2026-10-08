@@ -45,8 +45,9 @@ func TestHasBMI2AndADX(t *testing.T) {
 	t.Skip("/proc/cpuinfo has no CPU flags")
 }
 
-// TestFpFallback runs mul and square with useAsm cleared, as on a CPU
-// without BMI2 and ADX, so that fpMul and fpSquare jump to the Go code.
+// TestFpFallback runs the field and theta arithmetic with useAsm cleared, as
+// on a CPU without BMI2 and ADX, so that the assembly stubs jump to the Go
+// code.
 //
 //nolint:paralleltest // The test changes useAsm, which the parallel tests read.
 func TestFpFallback(t *testing.T) {
@@ -55,16 +56,35 @@ func TestFpFallback(t *testing.T) {
 
 	t.Cleanup(func() { useAsm = saved })
 
-	checkMulMatchesGeneric(t, newTestRand(t.Name()), 1000)
+	rnd := newTestRand(t.Name())
+	checkMulMatchesGeneric(t, rnd, 1000)
+
+	var point theta4
+	for i := range point {
+		point[i] = fromBig(t, randBig(rnd))
+	}
+
+	got, want := point, point
+	theta4HadamardGeneric(&want)
+
+	if got.hadamard(); got != want {
+		t.Fatalf("hadamard(%x) = %x, want %x", point, got, want)
+	}
 }
 
-// TestFpAsm checks the assembly against the generated Go code directly.
-func TestFpAsm(t *testing.T) {
-	t.Parallel()
+// skipWithoutAsm skips a test of the assembly on a CPU that can't run it.
+func skipWithoutAsm(t *testing.T) {
+	t.Helper()
 
 	if !hasBMI2AndADX() {
 		t.Skip("the CPU lacks BMI2 or ADX")
 	}
+}
+
+// TestFpAsm checks the assembly of GF(p) against the Go code directly.
+func TestFpAsm(t *testing.T) {
+	t.Parallel()
+	skipWithoutAsm(t)
 
 	rnd := newTestRand(t.Name())
 
@@ -83,6 +103,55 @@ func TestFpAsm(t *testing.T) {
 
 		if fpSquareAsm(&got, &elemX.l); got != want {
 			t.Fatalf("fpSquareAsm(%x) = %x, want %x", elemX.l, got, want)
+		}
+	}
+}
+
+// TestFp2Asm checks the assembly of GF(p²) against the Go code directly.
+func TestFp2Asm(t *testing.T) {
+	t.Parallel()
+	skipWithoutAsm(t)
+
+	rnd := newTestRand(t.Name())
+
+	for range 1000 {
+		elemX, elemY := toFp2(t, randGf2(rnd)), toFp2(t, randGf2(rnd))
+
+		var got, want fp2
+
+		fp2MulGeneric(&want, &elemX, &elemY)
+
+		if fp2MulAsm(&got, &elemX, &elemY); got != want {
+			t.Fatalf("fp2MulAsm(%x, %x) = %x, want %x", elemX, elemY, got, want)
+		}
+
+		fp2SquareGeneric(&want, &elemX)
+
+		if fp2SquareAsm(&got, &elemX); got != want {
+			t.Fatalf("fp2SquareAsm(%x) = %x, want %x", elemX, got, want)
+		}
+	}
+}
+
+// TestHadamardAsm checks the assembly of the Hadamard transform against the
+// Go code directly.
+func TestHadamardAsm(t *testing.T) {
+	t.Parallel()
+	skipWithoutAsm(t)
+
+	rnd := newTestRand(t.Name())
+
+	for range 100 {
+		var point theta4
+		for i := range point {
+			point[i] = fromBig(t, randBig(rnd))
+		}
+
+		got, want := point, point
+		theta4HadamardGeneric(&want)
+
+		if theta4HadamardAsm(&got); got != want {
+			t.Fatalf("theta4HadamardAsm(%x) = %x, want %x", point, got, want)
 		}
 	}
 }

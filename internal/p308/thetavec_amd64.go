@@ -192,7 +192,7 @@ func advanceVec(domain *theta4Structure, points []vtheta4, levels []int, top int
 		top++
 
 		prev := levels[top-1]
-		doublings := prev >> 1
+		doublings := int(thetaSplits[prev])
 
 		for gen := range generators {
 			dst := &points[generators*top+gen]
@@ -216,17 +216,27 @@ func vecThetaChain(domain theta4Structure, points []theta4, levels []int, top, s
 		vecPoints[idx].set(&points[idx])
 	}
 
-	for range steps {
+	var invDual theta4
+
+	for step := range steps {
+		if step > 0 && levels[top] != 1 {
+			domain = newTheta4StructureFromInvDual(&invDual)
+		}
+
 		top = advanceVec(&domain, vecPoints, levels, top)
-		domain = twoIsogeny4Vec(&vecPoints[generators*top], &vecPoints[generators*top+1], vecPoints[:generators*top])
+		invDual = twoIsogeny4Vec(&vecPoints[generators*top], &vecPoints[generators*top+1], vecPoints[:generators*top])
 		top = pop(levels, top)
 	}
 
-	return domain
+	if steps == 0 {
+		return domain
+	}
+
+	return newTheta4StructureFromInvDual(&invDual)
 }
 
 // twoIsogeny4Vec is twoIsogeny4 for points in vector form.
-func twoIsogeny4Vec(gen1, gen2 *vtheta4, images []vtheta4) theta4Structure {
+func twoIsogeny4Vec(gen1, gen2 *vtheta4, images []vtheta4) theta4 {
 	rhoInv := vecRhoInvPow(imageMuls)
 
 	// The kernel points also take imageMuls multiplications: the square and
@@ -256,5 +266,5 @@ func twoIsogeny4Vec(gen1, gen2 *vtheta4, images []vtheta4) theta4Structure {
 		img.hadamard()
 	}
 
-	return newTheta4StructureFromInvDual(&invDual)
+	return invDual
 }
