@@ -20,6 +20,24 @@ var (
 	fpExpInv  = [fpLimbs]uint64{0xfffffffffffffffd, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0x133fffffffffffff} // p − 2
 	fpExpSqrt = [fpLimbs]uint64{0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x04d0000000000000} // (p + 1)/4
 	fpExpLeg  = [fpLimbs]uint64{0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0x099fffffffffffff} // (p − 1)/2
+
+	// fpExpRsqrt is (p − 3)/4: x^((p − 3)/4) is 1/√x for a square x.
+	fpExpRsqrt = [fpLimbs]uint64{0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff, 0x04cfffffffffffff}
+
+	fpThird = [fpLimbs]uint64{0xaaaaaaaaaaaaaaaf, 0xaaaaaaaaaaaaaaaa, 0xaaaaaaaaaaaaaaaa, 0xaaaaaaaaaaaaaaaa, 0xaaaaaaaaaaaaaaaa, 0xaaaaaaaaaaaaaaaa, 0xaaaaaaaaaaaaaaaa, 0xaaaaaaaaaaaaaaaa, 0x01eaaaaaaaaaaaaa} // 1/3 in Montgomery form
+
+	// fpNonSquareSteps holds, in increasing order, the first integers h ≥ 1
+	// for which 1 + h² is not a square in GF(p).
+	fpNonSquareSteps = [...]uint16{
+		2, 3, 4, 5, 6, 9, 10, 11, 15, 18, 20, 23, 25, 26, 27, 28,
+		30, 32, 33, 35, 36, 37, 38, 43, 44, 46, 47, 51, 54, 65, 66, 67,
+		70, 72, 73, 77, 79, 80, 81, 85, 97, 98, 99, 101, 103, 105, 106, 107,
+		108, 114, 116, 117, 118, 119, 120, 122, 123, 124, 126, 127, 128, 131, 133, 136,
+		137, 138, 139, 141, 145, 146, 149, 150, 156, 160, 163, 164, 166, 168, 170, 171,
+		172, 175, 177, 179, 180, 181, 186, 188, 190, 191, 193, 195, 196, 197, 198, 206,
+		210, 211, 212, 213, 216, 217, 218, 221, 223, 224, 226, 228, 229, 231, 232, 233,
+		236, 238, 241, 242, 243, 244, 247, 248, 255, 258, 259, 260, 261, 267, 268, 271,
+	}
 )
 
 // add sets z = x + y and returns z.
@@ -34,25 +52,25 @@ func (z *fp) add(x, y *fp) *fp {
 	t6, c := bits.Add64(x.l[6], y.l[6], c)
 	t7, c := bits.Add64(x.l[7], y.l[7], c)
 	t8, c := bits.Add64(x.l[8], y.l[8], c)
-	u0, b := bits.Sub64(t0, fpP[0], 0)
-	u1, b := bits.Sub64(t1, fpP[1], b)
-	u2, b := bits.Sub64(t2, fpP[2], b)
-	u3, b := bits.Sub64(t3, fpP[3], b)
-	u4, b := bits.Sub64(t4, fpP[4], b)
-	u5, b := bits.Sub64(t5, fpP[5], b)
-	u6, b := bits.Sub64(t6, fpP[6], b)
-	u7, b := bits.Sub64(t7, fpP[7], b)
-	u8, b := bits.Sub64(t8, fpP[8], b)
-	m := -b
-	z.l[0] = u0 ^ (m & (u0 ^ t0))
-	z.l[1] = u1 ^ (m & (u1 ^ t1))
-	z.l[2] = u2 ^ (m & (u2 ^ t2))
-	z.l[3] = u3 ^ (m & (u3 ^ t3))
-	z.l[4] = u4 ^ (m & (u4 ^ t4))
-	z.l[5] = u5 ^ (m & (u5 ^ t5))
-	z.l[6] = u6 ^ (m & (u6 ^ t6))
-	z.l[7] = u7 ^ (m & (u7 ^ t7))
-	z.l[8] = u8 ^ (m & (u8 ^ t8))
+	t0, b = bits.Sub64(t0, 0xffffffffffffffff, 0)
+	t1, b = bits.Sub64(t1, 0xffffffffffffffff, b)
+	t2, b = bits.Sub64(t2, 0xffffffffffffffff, b)
+	t3, b = bits.Sub64(t3, 0xffffffffffffffff, b)
+	t4, b = bits.Sub64(t4, 0xffffffffffffffff, b)
+	t5, b = bits.Sub64(t5, 0xffffffffffffffff, b)
+	t6, b = bits.Sub64(t6, 0xffffffffffffffff, b)
+	t7, b = bits.Sub64(t7, 0xffffffffffffffff, b)
+	t8, b = bits.Sub64(t8, fpPTop-1, b)
+	mask := -b
+	z.l[0], c = bits.Add64(t0, mask, 0)
+	z.l[1], c = bits.Add64(t1, mask, c)
+	z.l[2], c = bits.Add64(t2, mask, c)
+	z.l[3], c = bits.Add64(t3, mask, c)
+	z.l[4], c = bits.Add64(t4, mask, c)
+	z.l[5], c = bits.Add64(t5, mask, c)
+	z.l[6], c = bits.Add64(t6, mask, c)
+	z.l[7], c = bits.Add64(t7, mask, c)
+	z.l[8], c = bits.Add64(t8, (fpPTop-1)&mask, c)
 	return z
 }
 
@@ -68,16 +86,16 @@ func (z *fp) sub(x, y *fp) *fp {
 	t6, b := bits.Sub64(x.l[6], y.l[6], b)
 	t7, b := bits.Sub64(x.l[7], y.l[7], b)
 	t8, b := bits.Sub64(x.l[8], y.l[8], b)
-	m := -b
-	z.l[0], c = bits.Add64(t0, fpP[0]&m, 0)
-	z.l[1], c = bits.Add64(t1, fpP[1]&m, c)
-	z.l[2], c = bits.Add64(t2, fpP[2]&m, c)
-	z.l[3], c = bits.Add64(t3, fpP[3]&m, c)
-	z.l[4], c = bits.Add64(t4, fpP[4]&m, c)
-	z.l[5], c = bits.Add64(t5, fpP[5]&m, c)
-	z.l[6], c = bits.Add64(t6, fpP[6]&m, c)
-	z.l[7], c = bits.Add64(t7, fpP[7]&m, c)
-	z.l[8], c = bits.Add64(t8, fpP[8]&m, c)
+	mask := -b
+	z.l[0], c = bits.Add64(t0, mask, 0)
+	z.l[1], c = bits.Add64(t1, mask, c)
+	z.l[2], c = bits.Add64(t2, mask, c)
+	z.l[3], c = bits.Add64(t3, mask, c)
+	z.l[4], c = bits.Add64(t4, mask, c)
+	z.l[5], c = bits.Add64(t5, mask, c)
+	z.l[6], c = bits.Add64(t6, mask, c)
+	z.l[7], c = bits.Add64(t7, mask, c)
+	z.l[8], c = bits.Add64(t8, (fpPTop-1)&mask, c)
 	return z
 }
 
@@ -486,25 +504,25 @@ func fpMulGeneric(z, x, y *[fpLimbs]uint64) {
 	t7, c = bits.Add64(t7, l0, 0)
 	t8, _ = bits.Add64(t8, h0, c)
 	var b uint64
-	u0, b := bits.Sub64(t0, fpP[0], 0)
-	u1, b := bits.Sub64(t1, fpP[1], b)
-	u2, b := bits.Sub64(t2, fpP[2], b)
-	u3, b := bits.Sub64(t3, fpP[3], b)
-	u4, b := bits.Sub64(t4, fpP[4], b)
-	u5, b := bits.Sub64(t5, fpP[5], b)
-	u6, b := bits.Sub64(t6, fpP[6], b)
-	u7, b := bits.Sub64(t7, fpP[7], b)
-	u8, b := bits.Sub64(t8, fpP[8], b)
-	m := -b
-	z[0] = u0 ^ (m & (u0 ^ t0))
-	z[1] = u1 ^ (m & (u1 ^ t1))
-	z[2] = u2 ^ (m & (u2 ^ t2))
-	z[3] = u3 ^ (m & (u3 ^ t3))
-	z[4] = u4 ^ (m & (u4 ^ t4))
-	z[5] = u5 ^ (m & (u5 ^ t5))
-	z[6] = u6 ^ (m & (u6 ^ t6))
-	z[7] = u7 ^ (m & (u7 ^ t7))
-	z[8] = u8 ^ (m & (u8 ^ t8))
+	t0, b = bits.Sub64(t0, 0xffffffffffffffff, 0)
+	t1, b = bits.Sub64(t1, 0xffffffffffffffff, b)
+	t2, b = bits.Sub64(t2, 0xffffffffffffffff, b)
+	t3, b = bits.Sub64(t3, 0xffffffffffffffff, b)
+	t4, b = bits.Sub64(t4, 0xffffffffffffffff, b)
+	t5, b = bits.Sub64(t5, 0xffffffffffffffff, b)
+	t6, b = bits.Sub64(t6, 0xffffffffffffffff, b)
+	t7, b = bits.Sub64(t7, 0xffffffffffffffff, b)
+	t8, b = bits.Sub64(t8, fpPTop-1, b)
+	mask := -b
+	z[0], c = bits.Add64(t0, mask, 0)
+	z[1], c = bits.Add64(t1, mask, c)
+	z[2], c = bits.Add64(t2, mask, c)
+	z[3], c = bits.Add64(t3, mask, c)
+	z[4], c = bits.Add64(t4, mask, c)
+	z[5], c = bits.Add64(t5, mask, c)
+	z[6], c = bits.Add64(t6, mask, c)
+	z[7], c = bits.Add64(t7, mask, c)
+	z[8], c = bits.Add64(t8, (fpPTop-1)&mask, c)
 }
 
 // fpSquareGeneric sets z = x²/R mod p. The input must be below p, and z may
@@ -733,25 +751,25 @@ func fpSquareGeneric(z, x *[fpLimbs]uint64) {
 	t16, c = bits.Add64(t16, r8, c)
 	t17, _ = bits.Add64(t17, rTop, c)
 	var b uint64
-	u0, b := bits.Sub64(t9, fpP[0], 0)
-	u1, b := bits.Sub64(t10, fpP[1], b)
-	u2, b := bits.Sub64(t11, fpP[2], b)
-	u3, b := bits.Sub64(t12, fpP[3], b)
-	u4, b := bits.Sub64(t13, fpP[4], b)
-	u5, b := bits.Sub64(t14, fpP[5], b)
-	u6, b := bits.Sub64(t15, fpP[6], b)
-	u7, b := bits.Sub64(t16, fpP[7], b)
-	u8, b := bits.Sub64(t17, fpP[8], b)
-	msk := -b
-	z[0] = u0 ^ (msk & (u0 ^ t9))
-	z[1] = u1 ^ (msk & (u1 ^ t10))
-	z[2] = u2 ^ (msk & (u2 ^ t11))
-	z[3] = u3 ^ (msk & (u3 ^ t12))
-	z[4] = u4 ^ (msk & (u4 ^ t13))
-	z[5] = u5 ^ (msk & (u5 ^ t14))
-	z[6] = u6 ^ (msk & (u6 ^ t15))
-	z[7] = u7 ^ (msk & (u7 ^ t16))
-	z[8] = u8 ^ (msk & (u8 ^ t17))
+	t9, b = bits.Sub64(t9, 0xffffffffffffffff, 0)
+	t10, b = bits.Sub64(t10, 0xffffffffffffffff, b)
+	t11, b = bits.Sub64(t11, 0xffffffffffffffff, b)
+	t12, b = bits.Sub64(t12, 0xffffffffffffffff, b)
+	t13, b = bits.Sub64(t13, 0xffffffffffffffff, b)
+	t14, b = bits.Sub64(t14, 0xffffffffffffffff, b)
+	t15, b = bits.Sub64(t15, 0xffffffffffffffff, b)
+	t16, b = bits.Sub64(t16, 0xffffffffffffffff, b)
+	t17, b = bits.Sub64(t17, fpPTop-1, b)
+	mask := -b
+	z[0], c = bits.Add64(t9, mask, 0)
+	z[1], c = bits.Add64(t10, mask, c)
+	z[2], c = bits.Add64(t11, mask, c)
+	z[3], c = bits.Add64(t12, mask, c)
+	z[4], c = bits.Add64(t13, mask, c)
+	z[5], c = bits.Add64(t14, mask, c)
+	z[6], c = bits.Add64(t15, mask, c)
+	z[7], c = bits.Add64(t16, mask, c)
+	z[8], c = bits.Add64(t17, (fpPTop-1)&mask, c)
 }
 
 // fromMontgomery returns the canonical integer value of x as little-endian

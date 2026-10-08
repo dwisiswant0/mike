@@ -28,6 +28,18 @@ const (
 	// (p + 1) >> sqrtShift, for p ≡ 3 mod 4.
 	sqrtShift = 2
 
+	// thirdDen is 3: fpThird is 1/thirdDen, which scales A to A/3, the shift
+	// of x to short Weierstrass form.
+	thirdDen = 3
+
+	// nonSquareStepCount is the length of fpNonSquareSteps, which must equal
+	// maxSamplingAttempts in internal/p308/torsion.go.
+	nonSquareStepCount = 128
+
+	// nonSquareStepsPerLine is the number of entries per line of
+	// fpNonSquareSteps.
+	nonSquareStepsPerLine = 16
+
 	// primalityRounds is the number of Miller–Rabin rounds for checking that
 	// a modulus is prime.
 	primalityRounds = 32
@@ -55,12 +67,18 @@ type arith struct {
 // fieldConstants holds the field constants, as Go array literals of limbs,
 // except for PTop.
 type fieldConstants struct {
-	Modulus string
-	R, R2   string // Montgomery constants R and R² mod p
-	ExpInv  string // p − 2
-	ExpSqrt string // (p + 1) / 4
-	ExpLeg  string // (p − 1) / 2
-	PTop    string // the top limb of p + 1
+	Modulus  string
+	R, R2    string // Montgomery constants R and R² mod p
+	ExpInv   string // p − 2
+	ExpSqrt  string // (p + 1) / 4
+	ExpLeg   string // (p − 1) / 2
+	ExpRsqrt string // (p − 3) / 4
+	Third    string // 1/3 in Montgomery form
+	PTop     string // the top limb of p + 1
+
+	// NonSquareSteps lists the first integers h ≥ 1 for which 1 + h² is
+	// not a square modulo p.
+	NonSquareSteps string
 }
 
 // fieldCode holds the bodies of the generated arithmetic functions.
@@ -122,15 +140,54 @@ func newFieldConstants(modulus *big.Int, size int) fieldConstants {
 	montR2 := new(big.Int).Mul(montR, montR)
 	montR2.Mod(montR2, modulus)
 
+	// (p − 3)/4 = (p + 1)/4 − 1.
+	expSqrt := new(big.Int).Rsh(plusOne, sqrtShift)
+	expRsqrt := new(big.Int).Sub(expSqrt, one)
+
+	third := big.NewInt(thirdDen)
+	third.ModInverse(third, modulus).Mul(third, montR).Mod(third, modulus)
+
 	return fieldConstants{
-		Modulus: limbs(modulus, size),
-		R:       limbs(montR, size),
-		R2:      limbs(montR2, size),
-		ExpInv:  limbs(new(big.Int).Sub(modulus, two), size),
-		ExpSqrt: limbs(new(big.Int).Rsh(plusOne, sqrtShift), size),
-		ExpLeg:  limbs(new(big.Int).Rsh(minusOne, 1), size),
-		PTop:    fmt.Sprintf("%#x", new(big.Int).Rsh(plusOne, uint(limbBits*(size-1)))),
+		Modulus:  limbs(modulus, size),
+		R:        limbs(montR, size),
+		R2:       limbs(montR2, size),
+		ExpInv:   limbs(new(big.Int).Sub(modulus, two), size),
+		ExpSqrt:  limbs(expSqrt, size),
+		ExpLeg:   limbs(new(big.Int).Rsh(minusOne, 1), size),
+		ExpRsqrt: limbs(expRsqrt, size),
+		Third:    limbs(third, size),
+		PTop:     fmt.Sprintf("%#x", new(big.Int).Rsh(plusOne, uint(limbBits*(size-1)))),
+
+		NonSquareSteps: nonSquareSteps(modulus),
 	}
+}
+
+// nonSquareSteps returns the first nonSquareStepCount integers h ≥ 1 for
+// which 1 + h² is not a square modulo the prime modulus, as the lines of a
+// Go composite literal.
+func nonSquareSteps(modulus *big.Int) string {
+	var (
+		out   strings.Builder
+		count int
+	)
+
+	for step := int64(1); count < nonSquareStepCount; step++ {
+		if big.Jacobi(big.NewInt(step*step+1), modulus) != -1 {
+			continue
+		}
+
+		if count%nonSquareStepsPerLine == 0 {
+			out.WriteString("\n\t")
+		} else {
+			out.WriteString(" ")
+		}
+
+		fmt.Fprintf(&out, "%d,", step)
+
+		count++
+	}
+
+	return out.String() + "\n"
 }
 
 // limbs formats val as a Go array literal of size little-endian 64-bit
@@ -189,26 +246,49 @@ func genAdd(size int) string {
 		emit.linef("t%d, c := bits.Add64(x.l[%d], y.l[%d], %s)", limb, limb, limb, carry(limb, "c"))
 	}
 
-	subtractModulus(&emit, size, "z.l")
+	subtractModulus(&emit, size, 0, "z.l")
 
 	return emit.String()
 }
 
-// subtractModulus emits z = t − p if t ≥ p, and z = t otherwise, where dst
-// is the limb array of z.
-func subtractModulus(emit *emitter, size int, dst string) {
+// subtractModulus emits dst = t − p if t ≥ p, and dst = t otherwise, where t
+// is the limbs t<first> to t<first+size−1>. It subtracts p in place and adds p
+// back if that borrowed, which keeps fewer values live than selecting between
+// t and t − p.
+func subtractModulus(emit *emitter, size, first int, dst string) {
 	for limb := range size {
-		emit.linef("u%d, b := bits.Sub64(t%d, fpP[%d], %s)", limb, limb, limb, carry(limb, "b"))
+		emit.linef("t%d, b = bits.Sub64(t%d, %s, %s)", first+limb, first+limb, modulusLimb(limb, size), carry(limb, "b"))
 	}
 
-	emit.linef("m := -b")
+	emit.linef("mask := -b")
 
 	for limb := range size {
-		emit.linef("%s[%d] = u%d ^ (m & (u%d ^ t%d))", dst, limb, limb, limb, limb)
+		emit.linef("%s[%d], c = bits.Add64(t%d, %s, %s)",
+			dst, limb, first+limb, maskedModulusLimb(limb, size), carry(limb, "c"))
 	}
 }
 
-// genSub emits z = x − y mod p.
+// modulusLimb returns a constant expression for limb i of p. The low limbs of
+// p are all ones and its top limb is fpPTop − 1, so the compiler can use them
+// as immediates.
+func modulusLimb(i, size int) string {
+	if i < size-1 {
+		return "0xffffffffffffffff"
+	}
+
+	return "fpPTop - 1"
+}
+
+// maskedModulusLimb returns an expression for limb i of p AND mask.
+func maskedModulusLimb(i, size int) string {
+	if i < size-1 {
+		return "mask"
+	}
+
+	return "(fpPTop - 1) & mask"
+}
+
+// genSub emits z = x − y mod p: it adds p back if the subtraction borrowed.
 func genSub(size int) string {
 	var emit emitter
 
@@ -218,10 +298,10 @@ func genSub(size int) string {
 		emit.linef("t%d, b := bits.Sub64(x.l[%d], y.l[%d], %s)", limb, limb, limb, carry(limb, "b"))
 	}
 
-	emit.linef("m := -b")
+	emit.linef("mask := -b")
 
 	for limb := range size {
-		emit.linef("z.l[%d], c = bits.Add64(t%d, fpP[%d]&m, %s)", limb, limb, limb, carry(limb, "c"))
+		emit.linef("z.l[%d], c = bits.Add64(t%d, %s, %s)", limb, limb, maskedModulusLimb(limb, size), carry(limb, "c"))
 	}
 
 	return emit.String()
@@ -249,7 +329,7 @@ func genMul(size int) string {
 	}
 
 	emit.linef("var b uint64")
-	subtractModulus(&emit, size, "z")
+	subtractModulus(&emit, size, 0, "z")
 
 	return emit.String()
 }
@@ -411,16 +491,7 @@ func emitSquareReduce(emit *emitter, size int) {
 	emit.linef("t%d, _ = bits.Add64(t%d, rTop, c)", productLimbs*size-1, productLimbs*size-1)
 
 	emit.linef("var b uint64")
-
-	for limb := range size {
-		emit.linef("u%d, b := bits.Sub64(t%d, fpP[%d], %s)", limb, size+limb, limb, carry(limb, "b"))
-	}
-
-	emit.linef("msk := -b")
-
-	for limb := range size {
-		emit.linef("z[%d] = u%d ^ (msk & (u%d ^ t%d))", limb, limb, limb, size+limb)
-	}
+	subtractModulus(emit, size, size, "z")
 }
 
 // genFromMont emits the conversion out of Montgomery form, x/R mod p. It is

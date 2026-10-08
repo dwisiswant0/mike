@@ -288,6 +288,19 @@ func (c *curve) doubleNFast(base *point, aDiv3 *fp2, count int) point {
 	return res
 }
 
+// descend returns the multiples [2^(levels[0] − level)]base for each level
+// in levels, which must decrease. The argument aDiv3 must be A/3.
+func (c *curve) descend(base *point, aDiv3 *fp2, levels []int) []point {
+	mults := make([]point, len(levels))
+	mults[0] = *base
+
+	for idx := 1; idx < len(levels); idx++ {
+		mults[idx] = c.doubleNFast(&mults[idx-1], aDiv3, levels[idx-1]-levels[idx])
+	}
+
+	return mults
+}
+
 // add returns lhs + rhs. It handles lhs = rhs and the point at infinity, and
 // runs in constant time.
 func (c *curve) add(lhs, rhs *point) point {

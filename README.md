@@ -79,13 +79,13 @@ random supersingular curves. RigorousMIKE does not need that assumption.
 ## Performance
 
 The following times are for one operation on one core of an AMD EPYC 7763, with
-Go 1.27.1 on linux/amd64. Each time is the median of 10 runs, with the runs of
+Go 1.27.1 on linux/amd64. Each time is the median of 8 runs, with the runs of
 the builds interleaved.
 
 On amd64, two optional speedups are available: the
-[BMI2 and ADX instructions](#bmi2-and-adx-instructions) for the field
-multiplication, and [AVX2 vector code](#avx2-vector-code) for `SharedSecret`.
-The columns show each combination:
+[BMI2 and ADX instructions](#bmi2-and-adx-instructions) for the arithmetic, and
+[AVX2 vector code](#avx2-vector-code) for `SharedSecret`. The columns show each
+combination:
 
 - **Go**: neither, as in a build with the `purego` tag and on other
   architectures.
@@ -98,27 +98,28 @@ The columns show each combination:
 
 | Parameter set | Go      | BMI2 + ADX |
 | ------------- | ------- | ---------- |
-| `Fast1`       | 1.1 ms  | 0.84 ms    |
-| `Fast3`       | 3.5 ms  | 2.6 ms     |
-| `Fast5`       | 13.3 ms | 5.5 ms     |
-| `Rigorous1`   | 2.3 ms  | 1.9 ms     |
-| `Rigorous3`   | 9.9 ms  | 5.4 ms     |
-| `Rigorous5`   | 32 ms   | 13.7 ms    |
+| `Fast1`       | 0.93 ms | 0.62 ms    |
+| `Fast3`       | 3.0 ms  | 2.0 ms     |
+| `Fast5`       | 10.8 ms | 4.1 ms     |
+| `Rigorous1`   | 2.0 ms  | 1.4 ms     |
+| `Rigorous3`   | 10.9 ms | 4.2 ms     |
+| `Rigorous5`   | 32 ms   | 10.7 ms    |
 
 `SharedSecret`:
 
 | Parameter set | Go      | BMI2 + ADX | AVX2    | BMI2 + ADX and AVX2 |
 | ------------- | ------- | ---------- | ------- | ------------------- |
-| `Fast1`       | 8.7 ms  | 7.6 ms     | 5.6 ms  | 5.0 ms              |
-| `Fast3`       | 28 ms   | 23 ms      | 17.6 ms | 15.2 ms             |
-| `Fast5`       | 84 ms   | 45 ms      | 43 ms   | 32 ms               |
-| `Rigorous1`   | 18.6 ms | 16.3 ms    | 12.2 ms | 11.1 ms             |
-| `Rigorous3`   | 67 ms   | 45 ms      | 41 ms   | 31 ms               |
-| `Rigorous5`   | 214 ms  | 109 ms     | 117 ms  | 75 ms               |
+| `Fast1`       | 6.7 ms  | 4.2 ms     | 4.1 ms  | 3.6 ms              |
+| `Fast3`       | 21 ms   | 13.8 ms    | 14.5 ms | 12.4 ms             |
+| `Fast5`       | 60 ms   | 27 ms      | 38 ms   | 26 ms               |
+| `Rigorous1`   | 14.0 ms | 9.7 ms     | 9.2 ms  | 8.2 ms              |
+| `Rigorous3`   | 60 ms   | 28 ms      | 38 ms   | 25 ms               |
+| `Rigorous5`   | 179 ms  | 68 ms      | 98 ms   | 64 ms               |
 
-Without the BMI2 and ADX instructions, the times for `Fast5` depend on where
-the linker places the code. For example, `GenerateKey` runs the same Go code in
-the build with the vector code, where it took 9.6 ms.
+Without the BMI2 and ADX instructions, the times of the larger parameter sets
+depend on where the linker places the code. For example, `GenerateKey` runs the
+same Go code in the build with the vector code, where it took 11.2 ms for
+`Fast5` and 12.6 ms for `Rigorous3`.
 
 `NewPrivateKey` takes about as long as `GenerateKey`; `NewPublicKey` runs only
 the inexpensive checks, which take less than a microsecond for `Fast1`.
@@ -133,15 +134,16 @@ benchstat bench.txt
 
 ### BMI2 and ADX instructions
 
-On amd64, multiplication and squaring in $`\mathrm{GF}(p)`$ use the BMI2 and
-ADX instructions if the CPU supports them, as Intel CPUs do since Broadwell and
-AMD CPUs since Zen. On other CPUs and architectures, and in builds with the
+On amd64, multiplication and squaring in $`\mathrm{GF}(p)`$ and
+$`\mathrm{GF}(p^2)`$, and the Hadamard transform of theta points, use the BMI2
+and ADX instructions if the CPU supports them, as Intel CPUs do since Broadwell
+and AMD CPUs since Zen. On other CPUs and architectures, and in builds with the
 `purego` tag, they run the Go code instead. Both give the same results.
 
 On the machine above, the BMI2 and ADX instructions cut the time of
-`GenerateKey` by 19% to 59% and that of `SharedSecret` by 12% to 49%, compared
-with the Go code. The
-parameter sets with the largest primes gain the most. To compare the two:
+`GenerateKey` by 33% to 67% and that of `SharedSecret` by 31% to 62%, compared
+with the Go code. The parameter sets with the largest primes gain the most. To
+compare the two:
 
 ```sh
 go test -tags purego -run '^$' -bench . -benchmem -cpu 1 -count 10 > purego.txt
@@ -156,11 +158,11 @@ On amd64, `SharedSecret` can use AVX2 vector code. It needs the experimental
 
 In such a build, the package uses the vector code if the CPU supports AVX2,
 and the scalar code otherwise. Both give the same results. On the machine above,
-the vector code cuts the time of `SharedSecret` by 34% to 49% with the Go field
-arithmetic, and by 30% to 35% with the BMI2 and ADX instructions.
+the vector code cuts the time of `SharedSecret` by 31% to 45% with the Go field
+arithmetic, and by 5% to 15% with the BMI2 and ADX instructions.
 
 The vector code computes the dimension-4 isogeny chain, which takes most of
-the time of `SharedSecret`, and allocates 27 KiB to 80 KiB more per call.
+the time of `SharedSecret`, and allocates 40 KiB to 136 KiB more per call.
 `GenerateKey` doesn't use it.
 
 The `archsimd` API is experimental and might change in a later Go release. The
@@ -194,9 +196,8 @@ in the default configuration of the Rust reference.
   how the code is written and was checked by code review, not by measurement
   or formal verification. The field arithmetic uses `math/bits`, whose
   `Add64`, `Sub64`, and `Mul64` functions run in constant time. The AVX2
-  vector code follows the same rules, and the field multiplication with the
-  BMI2 and ADX instructions has no branches and selects its result with
-  `CMOV`.
+  vector code follows the same rules, and the assembly for the BMI2 and ADX
+  instructions has no branches and selects results with masks or `CMOV`.
 - `NewPublicKey` rejects non-canonical encodings and curves defined over
   $`\mathrm{GF}(p)`$. `SharedSecret` also checks that the peer's curve is
   supersingular and normalized, and returns an error otherwise. These checks
@@ -218,9 +219,9 @@ The root package `mike` holds the API. The math lives in one package per prime,
   `fpvec_arith_amd64.go`) and the parameters (`params.go`) for each prime, and
   copies the other files of `internal/p308` into the other packages.
 - For each prime, `internal/asmgen` uses
-  [avo](https://github.com/mmcloughlin/avo) to generate `fp_amd64.s`, the field
-  multiplication with the BMI2 and ADX instructions. It's a module of its own,
-  so that the `mike` module doesn't depend on avo.
+  [avo](https://github.com/mmcloughlin/avo) to generate `fp_amd64.s`, the
+  assembly for the BMI2 and ADX instructions. It's a module of its own, so that
+  the `mike` module doesn't depend on avo.
 
 With one package per prime, each field operation is a direct call, and its
 temporaries stay on the stack. Two generic designs were measured during
@@ -247,11 +248,31 @@ halves, and then reduces the accumulator by one limb. Because $`p + 1`$ is a
 multiple of $`2^{64(N-1)}`$, where $`N`$ is the number of limbs, that reduction
 takes a single multiplication. Up to 9 limbs, the accumulator stays in
 registers. For 10 and 12 limbs, $`x`$ is copied to the stack to free a register,
-and for 12 limbs, two limbs of the accumulator live there too. At these sizes,
-squaring sums the products column by column instead, which computes each cross
-product once. The Go compiler uses neither `MULX` nor `ADCX` and `ADOX`, and it
-spills much of the unrolled Go code to the stack: for 12 limbs, 1,070 of the
-1,749 instructions of the Go multiplication access the stack.
+and for 12 limbs, two limbs of the accumulator live there too.
+
+Squaring computes each cross product once, which takes about half the
+multiplications. It works in three phases: it sums the cross products row by
+row, doubles them and adds the squares of the limbs, and then reduces the
+product. The quotient limbs of that reduction are limbs of the product, so its
+multiplications don't depend on each other. As much of the product as fits
+stays in registers: all limbs but one for 5 and 6 limbs. In
+$`\mathrm{GF}(p^2)`$, a multiplication takes three multiplications in
+$`\mathrm{GF}(p)`$ and a squaring two, on sums that aren't reduced. For 12
+limbs, the code calls the $`\mathrm{GF}(p)`$ multiplication instead of
+repeating it, which measured faster. The Hadamard transform keeps each sum and
+difference in registers.
+
+The Go compiler uses neither `MULX` nor `ADCX` and `ADOX`, and it spills much
+of the unrolled Go code to the stack: for 12 limbs, 1,043 of the 1,717
+instructions of the Go multiplication access the stack.
+
+Both isogeny chains save intermediate multiples of the kernel points on a
+stack. Rather than halving the remaining length at each split, they follow
+optimal strategies for the costs of their steps, which `internal/gen` computes
+by dynamic programming and stores in `params.go`. Before the gluing, the
+dimension-4 chain halves the length on $`E`$, where doubling is cheaper, and
+doubles only $`[n]P`$ and $`[n]Q`$: it gets the other generators by adding
+multiples of $`P`$ and $`Q`$, which the kernel of the gluing needs anyway.
 
 To change the code, see [CONTRIBUTING](/docs/CONTRIBUTING.md).
 

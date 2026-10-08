@@ -23,9 +23,9 @@ go generate
 ```
 
 `internal/asmgen` uses [avo](https://github.com/mmcloughlin/avo) to generate
-`fp_amd64.s`, the field multiplication with the BMI2 and ADX instructions.
-It's a module of its own, so that the `mike` module doesn't depend on avo. Its
-`go.mod` pins the avo release, which the first run downloads.
+`fp_amd64.s`, the assembly for the BMI2 and ADX instructions. It's a module of
+its own, so that the `mike` module doesn't depend on avo. Its `go.mod` pins the
+avo release, which the first run downloads.
 
 Tests in `internal/gen` and `internal/asmgen` fail when a generated file is
 out of date.
@@ -40,9 +40,10 @@ go test ./...
 
 With `-short`, the slow tests run only for `Fast1`.
 
-On amd64, the field multiplication uses the BMI2 and ADX instructions if the
-CPU supports them. The tests check that code against the Go code. To test the Go
-code by itself, as on other architectures, use the `purego` build tag:
+On amd64, the multiplication, the squaring, and the Hadamard transform use the
+BMI2 and ADX instructions if the CPU supports them. The tests check that code
+against the Go code, also with the CPU check turned off. To test the Go code by
+itself, as on other architectures, use the `purego` build tag:
 
 ```sh
 go test -tags purego ./...
@@ -83,5 +84,6 @@ Code that handles private keys must not branch on secret data or use it to
 index memory. Express secret conditions as `uint64` values that are 1 or 0,
 and apply them with helpers such as `selectFrom`, `swap`, and `condNeg`.
 
-The field multiplication with the BMI2 and ADX instructions follows the same
-rules: it has no branches, and it selects the reduced result with `CMOV`.
+The assembly for the BMI2 and ADX instructions follows the same rules: apart
+from the CPU check, it has no branches, and it selects results with masks or
+`CMOV`.

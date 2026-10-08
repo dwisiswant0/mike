@@ -21,3 +21,21 @@ const (
 	basisXQ        = "{{.Q}}"
 	basisXPQ       = "{{.PQ}}"
 )
+
+// fourIsogenySplits[l] is the number of multiplications by 4 that the chain
+// of key generation applies to a point at level l, one that needs l of them
+// to generate a 4-isogeny, before saving it. The entries follow an optimal
+// strategy for the costs of multiplying by 4 and of evaluating a 4-isogeny,
+// which keeps at most fourIsogenyStackSize points.
+var fourIsogenySplits = [...]uint16{ {{- .FourIsogenySplits -}} }
+
+const fourIsogenyStackSize = {{.FourIsogenyStackSize}}
+
+// thetaSplits[l] is the number of doublings that the theta chain of the
+// shared secret applies to an entry at level l ≥ 2 before saving it. The
+// entries follow an optimal strategy for the costs of doubling, of
+// evaluating a 2-isogeny, and of the values for doubling on each codomain,
+// which keeps at most thetaStackDepth entries for one entry.
+var thetaSplits = [...]uint16{ {{- .ThetaSplits -}} }
+
+const thetaStackDepth = {{.ThetaStackDepth}}

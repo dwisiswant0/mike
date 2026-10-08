@@ -49,6 +49,8 @@ func (c *curve) fullOrderPointFromA() (pointX, bool) {
 // fullOrderPointFromNQR returns x(P) for a point P of order divisible by 2^f,
 // assuming A is a square. It returns (−A : 1 + i·h) for the smallest h ≥ 1
 // such that 1 + h² is not a square in GF(p) and the point lies on the curve.
+// The candidates for h come from fpNonSquareSteps, which has
+// maxSamplingAttempts entries.
 func (c *curve) fullOrderPointFromNQR() (pointX, bool) {
 	var res pointX
 
@@ -58,17 +60,13 @@ func (c *curve) fullOrderPointFromNQR() (pointX, bool) {
 
 	aSquared.square(&c.a)
 
-	var step uint64 // h
-
-	for range maxSamplingAttempts {
-		step = nextNonSquareStep(step)
-
+	for _, step := range fpNonSquareSteps {
 		// −A/(1 + i·h) is on the curve if A²·(z − 1) − z² is not a square,
 		// for z = 1 + i·h.
 		res.z.one()
-		res.z.im.setUint64(step)
+		res.z.im.setUint64(uint64(step))
 		lhs.zero()
-		lhs.im.setUint64(step)
+		lhs.im.setUint64(uint64(step))
 		lhs.mul(&aSquared, &lhs)
 		zSquared.square(&res.z)
 
@@ -78,21 +76,6 @@ func (c *curve) fullOrderPointFromNQR() (pointX, bool) {
 	}
 
 	return res, false
-}
-
-// nextNonSquareStep returns the smallest h > prev such that 1 + h² is not a
-// square in GF(p). It depends only on p.
-func nextNonSquareStep(prev uint64) uint64 {
-	step := prev + 1
-
-	for {
-		var value fp
-		if value.setUint64(step*step+1).isSquare() == 0 {
-			return step
-		}
-
-		step++
-	}
 }
 
 // projectiveDifference returns x(P − Q) or x(P + Q), given x(P) and x(Q).

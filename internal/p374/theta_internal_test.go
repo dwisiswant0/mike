@@ -90,3 +90,44 @@ func TestTheta2Hadamard(t *testing.T) {
 		}
 	}
 }
+
+func BenchmarkTheta4(b *testing.B) {
+	var point, factor theta4
+
+	for i := range point {
+		point[i].setUint64(testUint64 - uint64(i))
+		factor[i].setUint64(uint64(i) + 1)
+	}
+
+	b.Run("hadamard", func(b *testing.B) {
+		for b.Loop() {
+			point.hadamard()
+		}
+	})
+	b.Run("square", func(b *testing.B) {
+		for b.Loop() {
+			point.square()
+		}
+	})
+	b.Run("mulCoords", func(b *testing.B) {
+		for b.Loop() {
+			point.mulCoords(&factor)
+		}
+	})
+
+	structure := theta4Structure{null: factor, invNull: factor, invDualSq: factor}
+
+	b.Run("double", func(b *testing.B) {
+		for b.Loop() {
+			structure.double(&point)
+		}
+	})
+	b.Run("eval", func(b *testing.B) {
+		for b.Loop() {
+			point.square()
+			point.hadamard()
+			point.mulCoords(&factor)
+			point.hadamard()
+		}
+	})
+}

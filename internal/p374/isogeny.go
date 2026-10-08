@@ -6,10 +6,7 @@
 
 package p374
 
-import (
-	"math/bits"
-	"slices"
-)
+import "slices"
 
 // This file computes the secret 2^e-isogeny of key generation as a chain of
 // 4-isogenies between Montgomery curves, and normalizes the codomain into
@@ -58,36 +55,36 @@ func (phi *fourIsogeny) eval(dst *pointX) {
 	dst.z.mul(&dst.z, &tmp0)
 }
 
-// twoIsogenyChain returns the normalized codomain of the 2^exp-isogeny whose
-// kernel is ⟨[4]K⟩. The point K must have order 2^(exp+2) and exp must be
-// even.
+// twoIsogenyChain returns the normalized codomain of the 2^e-isogeny whose
+// kernel is ⟨[4]K⟩. The point K must have order 2^(e+2).
 //
-// The chain uses 4-isogenies and a balanced strategy, which keeps O(log exp)
-// intermediate multiples of K. The point of order 4 that K maps to on the
-// codomain is used for normalization.
-func (c *curve) twoIsogenyChain(kernel *pointX, exp int) curve {
+// The chain uses 4-isogenies and the strategy of fourIsogenySplits, which
+// keeps O(log e) intermediate multiples of K. The point of order 4 that K
+// maps to on the codomain is used for normalization.
+func (c *curve) twoIsogenyChain(kernel *pointX) curve {
 	a24 := c.a24
 
 	var c24 fp2
 
 	c24.one()
 
-	// points[i] has order 2^orders[i].
-	space := bits.Len(uint(exp))
-	points := make([]pointX, space)
-	orders := make([]int, space)
+	// points[i] has order 2^orders[i]: it is at level orders[i]/2 − 1, as it
+	// needs that many multiplications by 4 to generate a 4-isogeny.
+	var (
+		points [fourIsogenyStackSize]pointX
+		orders [fourIsogenyStackSize]int
+	)
+
 	points[0] = *kernel
-	orders[0] = exp + fourIsogenyDegreeLog
+	orders[0] = isogenyExponent + fourIsogenyDegreeLog
 
 	top := 0
-	for range exp / fourIsogenyDegreeLog {
+	for range isogenyExponent / fourIsogenyDegreeLog {
 		// Double towards a point of order 4, saving intermediate multiples.
-		// Each push doubles by about half of the remaining exponent, rounded
-		// to an even number because each step consumes a factor of 4.
 		for orders[top] != fourIsogenyDegreeLog {
 			top++
 			prev := orders[top-1]
-			steps := fourIsogenyDegreeLog*(prev>>fourIsogenyDegreeLog) + (prev & 1)
+			steps := fourIsogenyDegreeLog * int(fourIsogenySplits[prev/fourIsogenyDegreeLog-1])
 
 			points[top] = points[top-1]
 			for range steps {

@@ -21,3 +21,19 @@ func (z *fp) square(x *fp) *fp {
 
 	return z
 }
+
+// mul sets z = x·y and returns z.
+func (z *fp2) mul(x, y *fp2) *fp2 {
+	fp2MulGeneric(z, x, y)
+
+	return z
+}
+
+// square sets z = x² and returns z.
+func (z *fp2) square(x *fp2) *fp2 {
+	fp2SquareGeneric(z, x)
+
+	return z
+}
+
+func theta4Hadamard(p *theta4) { theta4HadamardGeneric(p) }

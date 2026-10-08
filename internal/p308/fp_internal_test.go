@@ -149,10 +149,17 @@ func TestFpMulMatchesGeneric(t *testing.T) {
 	checkMulMatchesGeneric(t, newTestRand(t.Name()), 10000)
 }
 
-// checkMulMatchesGeneric checks mul and square against fpMulGeneric and
-// fpSquareGeneric on count pairs of random elements, also with aliased
-// arguments.
+// checkMulMatchesGeneric checks the mul and square methods of fp and fp2
+// against the Go functions with the Generic suffix, on count pairs of random
+// elements of each field, also with aliased arguments.
 func checkMulMatchesGeneric(t *testing.T, rnd *testRand, count int) {
+	t.Helper()
+
+	checkFpMulMatchesGeneric(t, rnd, count)
+	checkFp2MulMatchesGeneric(t, rnd, count)
+}
+
+func checkFpMulMatchesGeneric(t *testing.T, rnd *testRand, count int) {
 	t.Helper()
 
 	for range count {
@@ -180,7 +187,34 @@ func checkMulMatchesGeneric(t *testing.T, rnd *testRand, count int) {
 	}
 }
 
-func TestFpSqrt(t *testing.T) {
+func checkFp2MulMatchesGeneric(t *testing.T, rnd *testRand, count int) {
+	t.Helper()
+
+	for range count {
+		elemX, elemY := toFp2(t, randGf2(rnd)), toFp2(t, randGf2(rnd))
+
+		var got, want fp2
+		if fp2MulGeneric(&want, &elemX, &elemY); *got.mul(&elemX, &elemY) != want {
+			t.Fatalf("fp2 mul(%x, %x) = %x, want %x", elemX, elemY, got, want)
+		}
+
+		got = elemX
+		if got.mul(&got, &elemY); got != want {
+			t.Fatalf("fp2 mul(%x, %x) aliased = %x, want %x", elemX, elemY, got, want)
+		}
+
+		if fp2SquareGeneric(&want, &elemX); *got.square(&elemX) != want {
+			t.Fatalf("fp2 square(%x) = %x, want %x", elemX, got, want)
+		}
+
+		got = elemX
+		if got.square(&got); got != want {
+			t.Fatalf("fp2 square(%x) aliased = %x, want %x", elemX, got, want)
+		}
+	}
+}
+
+func TestFpIsSquare(t *testing.T) {
 	t.Parallel()
 
 	rnd := newTestRand(t.Name())
@@ -193,23 +227,28 @@ func TestFpSqrt(t *testing.T) {
 		if got := elem.isSquare(); got != bit(isSquare) {
 			t.Fatalf("isSquare(%x) = %d, want %v", val, got, isSquare)
 		}
+	}
+}
 
-		root := new(big.Int)
-		if isSquare {
-			root.ModSqrt(val, prime())
+func TestFpNonSquareSteps(t *testing.T) {
+	t.Parallel()
 
-			if root.Bit(0) == 1 {
-				root.Sub(prime(), root)
-			}
+	if len(fpNonSquareSteps) != maxSamplingAttempts {
+		t.Fatalf("len(fpNonSquareSteps) = %d, want %d", len(fpNonSquareSteps), maxSamplingAttempts)
+	}
+
+	// The steps h with 1 + h² not a square, in increasing order.
+	var want []int64
+
+	for step := int64(1); len(want) < maxSamplingAttempts; step++ {
+		if big.Jacobi(big.NewInt(step*step+1), prime()) == -1 {
+			want = append(want, step)
 		}
+	}
 
-		var res fp
-		if ok := res.sqrt(&elem); ok != bit(isSquare) {
-			t.Fatalf("sqrt(%x) succeeded = %d, want %v", val, ok, isSquare)
-		}
-
-		if got := toBig(&res); got.Cmp(root) != 0 {
-			t.Fatalf("sqrt(%x) = %x, want %x", val, got, root)
+	for idx, got := range fpNonSquareSteps {
+		if int64(got) != want[idx] {
+			t.Fatalf("fpNonSquareSteps[%d] = %d, want %d", idx, got, want[idx])
 		}
 	}
 }
@@ -349,7 +388,8 @@ func TestFp2Sqrt(t *testing.T) {
 		checkFp2Root(t, &elem, &root, isSquare)
 	}
 
-	// Small elements of GF(p), whose roots may be purely imaginary.
+	// Small elements of GF(p), whose roots may be purely imaginary, and
+	// their products with i.
 	const smallCount = 8
 
 	for val := range uint64(smallCount) {
@@ -359,6 +399,14 @@ func TestFp2Sqrt(t *testing.T) {
 
 		if root.sqrt(&elem) != 1 {
 			t.Fatalf("sqrt(%d) failed", val)
+		}
+
+		checkFp2Root(t, &elem, &root, true)
+
+		elem.mulI(&elem)
+
+		if root.sqrt(&elem) != 1 {
+			t.Fatalf("sqrt(%d·i) failed", val)
 		}
 
 		checkFp2Root(t, &elem, &root, true)
@@ -455,6 +503,35 @@ func TestLessLE(t *testing.T) {
 			t.Errorf("lessLE(%x, %x) = %d, want %d", test.lhs, test.rhs, got, test.want)
 		}
 	}
+}
+
+func BenchmarkFp2(b *testing.B) {
+	var lhs, rhs fp2
+
+	lhs.re.setUint64(testUint64)
+	lhs.im.setUint64(testUint64 - 1)
+	rhs.re.setUint64(testUint64 - 2)
+	rhs.im.setUint64(testUint64 - 3)
+	b.Run("mul", func(b *testing.B) {
+		for b.Loop() {
+			lhs.mul(&lhs, &rhs)
+		}
+	})
+	b.Run("mulGeneric", func(b *testing.B) {
+		for b.Loop() {
+			fp2MulGeneric(&lhs, &lhs, &rhs)
+		}
+	})
+	b.Run("square", func(b *testing.B) {
+		for b.Loop() {
+			lhs.square(&lhs)
+		}
+	})
+	b.Run("squareGeneric", func(b *testing.B) {
+		for b.Loop() {
+			fp2SquareGeneric(&lhs, &lhs)
+		}
+	})
 }
 
 func BenchmarkFp(b *testing.B) {

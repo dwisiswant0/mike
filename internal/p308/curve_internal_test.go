@@ -131,9 +131,17 @@ func TestCurveDoublingAndX(t *testing.T) {
 	rnd := newTestRand(t.Name())
 	ell := testCurve(t, rnd)
 
+	// A/3, with 1/3 computed by an inversion, which also checks fpThird.
 	var aDiv3 fp2
 
-	aDiv3.setUint64(weierstrassShiftDen).invert(&aDiv3).mul(&aDiv3, &ell.a)
+	aDiv3.setUint64(3).invert(&aDiv3).mul(&aDiv3, &ell.a)
+
+	var viaThird fp
+
+	third := fp{fpThird}
+	if viaThird.mul(&ell.a.re, &third).equal(&aDiv3.re) == 0 {
+		t.Fatal("fpThird ≠ 1/3")
+	}
 
 	for range 20 {
 		ptP, ptQ := randPoint(t, &ell, rnd), randPoint(t, &ell, rnd)

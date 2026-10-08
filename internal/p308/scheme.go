@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // The errors describe invalid public keys. Package mike wraps them.
@@ -36,10 +37,6 @@ const (
 	// gluingOrderLog is n for the points of order 2^n that determine the
 	// gluing kernel.
 	gluingOrderLog = 5
-
-	// weierstrassShiftDen is the denominator of A/3, the shift of x that
-	// maps a Montgomery curve to short Weierstrass form.
-	weierstrassShiftDen = 3
 )
 
 // startingCurve returns the starting curve E0 and the basis (x(P0), x(Q0),
@@ -97,7 +94,7 @@ func ClampPrivateKey(key []byte) {
 func PublicKey(priv []byte) []byte {
 	start, basis := startingCurve()
 	kernel := start.threePointLadder(&basis, priv, isogenyExponent)
-	codomain := start.twoIsogenyChain(&kernel, isogenyExponent)
+	codomain := start.twoIsogenyChain(&kernel)
 
 	return codomain.a.bytes()
 }
@@ -146,14 +143,16 @@ func SharedSecret(priv, pub []byte) ([]byte, error) {
 
 	var aDiv3 fp2
 
-	aDiv3.setUint64(weierstrassShiftDen).invert(&aDiv3).mul(&aDiv3, &peer.a)
+	third := fp{fpThird}
+	aDiv3.re.mul(&peer.a.re, &third)
+	aDiv3.im.mul(&peer.a.im, &third)
 
-	gluing, chain, err := kernel(&peer, &aDiv3, priv)
+	gluing, pairs, err := kernel(&peer, &aDiv3, priv)
 	if err != nil {
 		return nil, err
 	}
 
-	codomain := peer.isogenyChain(&aDiv3, &gluing, &chain, isogenyExponent)
+	codomain := peer.isogenyChain(&gluing, pairs)
 
 	var buf []byte
 	for _, inv := range codomain.invariants() {
@@ -167,8 +166,9 @@ func SharedSecret(priv, pub []byte) ([]byte, error) {
 
 // kernel returns the kernel data of the dimension-4 isogeny for the secret
 // scalar sk, encoded by priv, on the peer's curve E, following Theorem 4.1
-// of the MIKE paper. It also validates E, and returns an error if E is not a
-// supersingular curve in normalized form. The argument aDiv3 must be A/3.
+// of the MIKE paper, and the curve entries of the stack of isogenyChain. It
+// also validates E, and returns an error if E is not a supersingular curve
+// in normalized form. The argument aDiv3 must be A/3.
 //
 // From a deterministic basis (P, Q) of E[2^(e+2)] and n = (sk − 1)/2:
 //
@@ -179,21 +179,28 @@ func SharedSecret(priv, pub []byte) ([]byte, error) {
 //   - the diagonal and Scholten kernels are ([2]Q32, [2]P32) and ([4]P32,
 //     [4]Q32).
 //
+// The stack entries are multiples [2^k] of the chain kernel generators. They
+// are computed as [2^k]([n]Q) + [2^k]Q, and so on, so that only [n]P and
+// [n]Q need doubling besides P and Q.
+//
 // Only the steps that involve sk need to run in constant time.
-func kernel(peer *curve, aDiv3 *fp2, priv []byte) (kernelPoints, [generators]pointPair, error) {
-	var (
-		data  kernelPoints
-		chain [generators]pointPair
-	)
+func kernel(peer *curve, aDiv3 *fp2, priv []byte) (kernelPoints, []pointPair, error) {
+	var data kernelPoints
 
 	basis, ok := peer.torsionBasis(primeExponent-basisOrderLog, primeCofactor)
 	if !ok {
-		return data, chain, ErrNotSupersingular
+		return data, nil, ErrNotSupersingular
 	}
 
+	// The multiples of P and Q for the stack entries, and P32 and Q32 at
+	// level 1.
+	levels := curveLevels(isogenyExponent - gluingDepth)
+	descent := append(slices.Clip(levels), 1)
+
 	ptP, ptQ := peer.liftBasis(&basis)
-	p32 := peer.doubleNFast(&ptP, aDiv3, basisOrderLog-gluingOrderLog)
-	q32 := peer.doubleNFast(&ptQ, aDiv3, basisOrderLog-gluingOrderLog)
+	multP := peer.descend(&ptP, aDiv3, descent)
+	multQ := peer.descend(&ptQ, aDiv3, descent)
+	p32, q32 := multP[len(levels)], multQ[len(levels)]
 	p16 := peer.double(&p32)
 	q16 := peer.double(&q32)
 	data.diagonal = [2]point{q16, p16}
@@ -202,16 +209,23 @@ func kernel(peer *curve, aDiv3 *fp2, priv []byte) (kernelPoints, [generators]poi
 
 	err := checkPublicKey(peer, &data.scholten[0], &data.scholten[1])
 	if err != nil {
-		return data, chain, err
+		return data, nil, err
 	}
 
 	// Multiplying with start = 1 skips the lowest bit of the odd scalar sk,
 	// which yields [n]P.
 	np := peer.mul(&ptP, priv, 1, isogenyExponent)
 	nq := peer.mul(&ptQ, priv, 1, isogenyExponent)
-	t1 := peer.add(&nq, &ptQ)
-	t3 := peer.add(&np, &ptP)
-	chain = [generators]pointPair{{t1, nq}, {t3.neg(), np.neg()}}
+	multNP := peer.descend(&np, aDiv3, levels)
+	multNQ := peer.descend(&nq, aDiv3, levels)
+
+	pairs := make([]pointPair, 0, generators*len(levels))
+
+	for idx := range levels {
+		t1 := peer.add(&multNQ[idx], &multQ[idx])
+		t3 := peer.add(&multNP[idx], &multP[idx])
+		pairs = append(pairs, pointPair{t1, multNQ[idx]}, pointPair{t3.neg(), multNP[idx].neg()})
+	}
 
 	// P32 and Q32 have order 32, so only the low bits of n matter.
 	np32 := peer.mul(&p32, priv, 1, gluingOrderLog+1)
@@ -224,7 +238,7 @@ func kernel(peer *curve, aDiv3 *fp2, priv []byte) (kernelPoints, [generators]poi
 		{peer.sub(&g1, &g3), peer.sub(&nq32, &np32)},
 	}
 
-	return data, chain, nil
+	return data, pairs, nil
 }
 
 // checkPublicKey checks that the curve peer is supersingular and in

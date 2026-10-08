@@ -76,7 +76,9 @@ func (z *fp2) conjugate(x *fp2) *fp2 {
 	return z
 }
 
-func (z *fp2) mul(lhs, rhs *fp2) *fp2 {
+// fp2MulGeneric sets out = lhs·rhs. The mul method calls it, or assembly on
+// amd64.
+func fp2MulGeneric(out, lhs, rhs *fp2) {
 	// (a + i·b)(c + i·d) = (ac − bd) + i·((a + b)(c + d) − ac − bd), where
 	// reProd = ac and imProd = bd.
 	var reProd, imProd, sum, rhsSum fp
@@ -86,24 +88,22 @@ func (z *fp2) mul(lhs, rhs *fp2) *fp2 {
 	sum.add(&lhs.re, &lhs.im)
 	rhsSum.add(&rhs.re, &rhs.im)
 	sum.mul(&sum, &rhsSum)
-	z.re.sub(&reProd, &imProd)
-	z.im.sub(&sum, &reProd)
-	z.im.sub(&z.im, &imProd)
-
-	return z
+	out.re.sub(&reProd, &imProd)
+	out.im.sub(&sum, &reProd)
+	out.im.sub(&out.im, &imProd)
 }
 
-func (z *fp2) square(base *fp2) *fp2 {
+// fp2SquareGeneric sets out = base². The square method calls it, or assembly
+// on amd64.
+func fp2SquareGeneric(out, base *fp2) {
 	// (a + i·b)² = (a + b)(a − b) + i·2ab
 	var sum, diff fp
 
 	sum.add(&base.re, &base.im)
 	diff.sub(&base.re, &base.im)
-	z.im.mul(&base.re, &base.im)
-	z.im.double(&z.im)
-	z.re.mul(&sum, &diff)
-
-	return z
+	out.im.mul(&base.re, &base.im)
+	out.im.double(&out.im)
+	out.re.mul(&sum, &diff)
 }
 
 // squareN sets z = x^(2^n).
@@ -176,39 +176,37 @@ func (z *fp2) isSquare() uint64 {
 //
 // The result matches the fp2 crate used by the reference implementation.
 func (z *fp2) sqrt(elem *fp2) uint64 {
-	// For a root a + i·b of x0 + i·x1: a² − b² = x0 and 2ab = x1. Then
-	// a² = (x0 ± √(x0² + x1²))/2, and exactly one sign gives a square in
-	// GF(p) when x1 ≠ 0. When x1 = 0, the root is √x0 or i·√−x0.
+	// The method of Aardal et al. (https://eprint.iacr.org/2024/1563), for
+	// p ≡ 3 mod 4. For a root a + i·b of x0 + i·x1, a² = (x0 + δ)/2 for a
+	// square root δ of x0² + x1². With t = 2(x0 + δ) and s = t^((p−3)/4),
+	// the root is (x0 + δ)·s + i·x1·s if t is a square, and
+	// x1·s − i·(x0 + δ)·s otherwise.
 	norm := elem.norm()
 
-	var normRoot, reSquared, rootRe, rootIm, tmp fp
+	var delta, sum, twice, scale, check fp
 
-	success := normRoot.sqrt(&norm)
+	delta.pow(&norm, &fpExpSqrt)
+	// If x1 = 0, δ may be −x0, which would make the sum zero, so take
+	// δ = x0 instead.
+	delta.selectFrom(&elem.re, &delta, elem.im.isZero())
+	sum.add(&elem.re, &delta)
+	twice.double(&sum)
+	scale.pow(&twice, &fpExpRsqrt)
 
-	reSquared.add(&elem.re, &normRoot)
-	reSquared.half(&reSquared)
+	var root, other fp2
 
-	imZero := elem.im.isZero()
-	reSquared.selectFrom(&elem.re, &reSquared, imZero)
+	root.re.mul(&sum, &scale)
+	root.im.mul(&elem.im, &scale)
+	other.re = root.im
+	other.im.neg(&root.re)
 
-	nonSquare := 1 ^ reSquared.isSquare()
-	reSquared.selectFrom(tmp.neg(&reSquared), &reSquared, nonSquare&imZero)
-	reSquared.selectFrom(tmp.sub(&reSquared, &normRoot), &reSquared, nonSquare&(1^imZero))
+	tIsSquare := check.double(&root.re).square(&check).equal(&twice)
+	root.selectFrom(&root, &other, tIsSquare)
 
-	success &= rootRe.sqrt(&reSquared)
-	tmp.double(&rootRe)
-	tmp.invert(&tmp)
-	rootIm.mul(&elem.im, &tmp)
+	var zero, squared fp2
 
-	// If x1 = 0 and x0 is not a square, the root is i·√−x0.
-	tmp = rootRe
-	rootRe.selectFrom(&rootIm, &rootRe, nonSquare&imZero)
-	rootIm.selectFrom(&tmp, &rootIm, nonSquare&imZero)
-
-	var zero fp
-
-	z.re.selectFrom(&rootRe, &zero, success)
-	z.im.selectFrom(&rootIm, &zero, success)
+	success := squared.square(&root).equal(elem)
+	z.selectFrom(&root, &zero, success)
 
 	reOdd := z.re.isOdd()
 	imOdd := z.im.isOdd()
