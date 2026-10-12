@@ -15,9 +15,11 @@ import (
 	"go.dw1.io/mike/internal/p758" //nolint:depguard // See above.
 )
 
-// The valid parameter sets. The zero value is invalid.
+// IDs of the valid parameter sets. ID 0 is reserved for the zero
+// ParameterSet, which is invalid. The IDs are unexported, so they are not
+// part of the API.
 const (
-	fast1 ParameterSet = iota + 1
+	fast1 = iota + 1
 	fast3
 	fast5
 	rigorous1
@@ -27,27 +29,27 @@ const (
 
 // Fast1 returns the FastMIKE parameter set for NIST security level I. It
 // uses the prime p = 633·2^308 − 1 and e = 228.
-func Fast1() ParameterSet { return fast1 }
+func Fast1() ParameterSet { return ParameterSet{fast1} }
 
 // Fast3 returns the FastMIKE parameter set for NIST security level III. It
 // uses the prime p = 593·2^474 − 1 and e = 340.
-func Fast3() ParameterSet { return fast3 }
+func Fast3() ParameterSet { return ParameterSet{fast3} }
 
 // Fast5 returns the FastMIKE parameter set for NIST security level V. It
 // uses the prime p = 317·2^628 − 1 and e = 452.
-func Fast5() ParameterSet { return fast5 }
+func Fast5() ParameterSet { return ParameterSet{fast5} }
 
 // Rigorous1 returns the RigorousMIKE parameter set for NIST security level
 // I. It uses the prime p = 117·2^374 − 1 and e = 372.
-func Rigorous1() ParameterSet { return rigorous1 }
+func Rigorous1() ParameterSet { return ParameterSet{rigorous1} }
 
 // Rigorous3 returns the RigorousMIKE parameter set for NIST security level
 // III. It uses the prime p = 77·2^566 − 1 and e = 564.
-func Rigorous3() ParameterSet { return rigorous3 }
+func Rigorous3() ParameterSet { return ParameterSet{rigorous3} }
 
 // Rigorous5 returns the RigorousMIKE parameter set for NIST security level
 // V. It uses the prime p = 41·2^758 − 1 and e = 756.
-func Rigorous5() ParameterSet { return rigorous5 }
+func Rigorous5() ParameterSet { return ParameterSet{rigorous5} }
 
 // implementation holds the name and the computations of a parameter set.
 type implementation struct {
@@ -62,7 +64,7 @@ type implementation struct {
 // impl returns the implementation of ps. It returns false if ps is not a
 // valid parameter set.
 func (ps ParameterSet) impl() (implementation, bool) {
-	switch ps {
+	switch ps.id {
 	case fast1:
 		return implementation{
 			"FastMIKE-I", p308.PrivateKeySize, p308.ClampPrivateKey,

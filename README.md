@@ -7,10 +7,16 @@ post-quantum *non-interactive key exchange* (*NIKE*): two parties who know
 each other's public keys compute the same shared secret, like Diffie-Hellman,
 with no further messages[^1].
 
+###### Status
+
 > [!WARNING]
 > MIKE was published in 2026, and its cryptanalysis has only begun. Its
-> parameters might change. This package hasn't been audited. Do NOT rely on it
+> parameters might change. This package hasn't been audited. Don't rely on it
 > alone to protect data.
+
+The package has not reached version 1.0 yet, so it's unsupported and its API is
+not stable. Big changes are not expected, but any release might adjust the API
+or fix bugs.
 
 ## Install
 

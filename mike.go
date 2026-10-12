@@ -43,11 +43,17 @@ import (
 // ParameterSet identifies a MIKE parameter set: a prime field, a starting
 // curve with a torsion basis, and the degree 2^e of the secret isogeny.
 //
-// The valid parameter sets are returned by [Fast1], [Fast3], [Fast5],
-// [Rigorous1], [Rigorous3], and [Rigorous5]. Other values, including the
-// zero value, are invalid, and methods return errors for them. Parameter
-// sets can be compared with == and are safe for concurrent use.
-type ParameterSet uint8
+// To get a valid parameter set, call [Fast1], [Fast3], [Fast5],
+// [Rigorous1], [Rigorous3], or [Rigorous5]. Each of these functions always
+// returns the same value, so you can compare parameter sets with == and use
+// them in switch statements. Parameter sets are safe for concurrent use.
+//
+// The zero value is invalid. [ParameterSet.GenerateKey],
+// [ParameterSet.NewPrivateKey], and [ParameterSet.NewPublicKey] return an
+// error for it.
+type ParameterSet struct {
+	id uint8
+}
 
 // SharedSecretSize is the size in bytes of the output of
 // [PrivateKey.SharedSecret].
@@ -69,7 +75,7 @@ var (
 func (ps ParameterSet) String() string {
 	impl, ok := ps.impl()
 	if !ok {
-		return "ParameterSet(" + strconv.Itoa(int(ps)) + ")"
+		return "ParameterSet(" + strconv.Itoa(int(ps.id)) + ")"
 	}
 
 	return impl.name
